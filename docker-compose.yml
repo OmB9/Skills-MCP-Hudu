@@ -37,6 +37,11 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
 
+    environment:
+      # Force Traefik's Docker client to use a modern API version.
+      # Required when the host Docker daemon no longer supports API 1.24 (the default).
+      - DOCKER_API_VERSION=1.54
+
     volumes:
       # Docker socket (read-only) — Traefik watches container labels
       - /var/run/docker.sock:/var/run/docker.sock:ro
