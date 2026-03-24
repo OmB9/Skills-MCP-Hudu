@@ -1,58 +1,30 @@
-version: '3.8'
-
 services:
   # ═══════════════════════════════════════════════════
-  # Traefik — Reverse proxy + automatic HTTPS (Let's Encrypt)
+  # Caddy — Reverse proxy + automatic HTTPS (Let's Encrypt)
+  # No Docker socket required — routes defined in Caddyfile
   # ═══════════════════════════════════════════════════
-  traefik:
-    image: traefik:v3.2
-    container_name: traefik
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
     restart: unless-stopped
 
     ports:
-      - "80:80"       # HTTP (redirects to HTTPS)
-      - "443:443"     # HTTPS
-
-    command:
-      # Logging
-      - "--log.level=INFO"
-
-      # Docker provider — only expose containers with traefik.enable=true
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=hudu-mcp-network"
-
-      # Entrypoints
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-
-      # Redirect all HTTP → HTTPS
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
-
-      # Let's Encrypt (HTTP-01 challenge — requires port 80 reachable from internet)
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "80:80"     # HTTP (Caddy auto-redirects to HTTPS)
+      - "443:443"   # HTTPS
 
     environment:
-      # Force Traefik's Docker client to use a modern API version.
-      # Required when the host Docker daemon no longer supports API 1.24 (the default).
-      - DOCKER_API_VERSION=1.54
+      - MCP_HOSTNAME=${MCP_HOSTNAME}
 
     volumes:
-      # Docker socket (read-only) — Traefik watches container labels
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Persistent storage for TLS certificates
-      - traefik-letsencrypt:/letsencrypt
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # Persistent cert storage
+      - caddy-config:/config   # Caddy config cache
 
     networks:
       - hudu-mcp-network
 
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -91,34 +63,6 @@ services:
     networks:
       - hudu-mcp-network
 
-    labels:
-      - "traefik.enable=true"
-
-      # Router — serves all paths on the MCP hostname over HTTPS
-      - "traefik.http.routers.hudu-mcp.rule=Host(`${MCP_HOSTNAME}`)"
-      - "traefik.http.routers.hudu-mcp.entrypoints=websecure"
-      - "traefik.http.routers.hudu-mcp.tls=true"
-      - "traefik.http.routers.hudu-mcp.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.hudu-mcp.service=hudu-mcp"
-      - "traefik.http.routers.hudu-mcp.middlewares=hudu-security-headers,hudu-rate-limit"
-
-      # Backend — port 3100 inside the container
-      - "traefik.http.services.hudu-mcp.loadbalancer.server.port=3100"
-
-      # Security headers
-      - "traefik.http.middlewares.hudu-security-headers.headers.customresponseheaders.X-Frame-Options=DENY"
-      - "traefik.http.middlewares.hudu-security-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff"
-      - "traefik.http.middlewares.hudu-security-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block"
-      - "traefik.http.middlewares.hudu-security-headers.headers.customresponseheaders.Referrer-Policy=strict-origin-when-cross-origin"
-      - "traefik.http.middlewares.hudu-security-headers.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.hudu-security-headers.headers.stsPreload=true"
-      - "traefik.http.middlewares.hudu-security-headers.headers.stsSeconds=31536000"
-
-      # Rate limiting
-      - "traefik.http.middlewares.hudu-rate-limit.ratelimit.average=67"
-      - "traefik.http.middlewares.hudu-rate-limit.ratelimit.burst=100"
-      - "traefik.http.middlewares.hudu-rate-limit.ratelimit.period=1m"
-
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
       interval: 30s
@@ -148,5 +92,7 @@ networks:
     name: hudu-mcp-network
 
 volumes:
-  traefik-letsencrypt:
-    name: traefik-letsencrypt
+  caddy-data:
+    name: caddy-data
+  caddy-config:
+    name: caddy-config
