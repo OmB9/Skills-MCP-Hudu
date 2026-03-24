@@ -18,6 +18,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import axios from 'axios';
 import { HuduClient } from './hudu-client.js';
 import { FilteredHuduClient } from './filtered-hudu-client.js';
 import { HuduConfig } from './types.js';
@@ -757,49 +758,113 @@ export class HuduMcpServer {
 
       const azureAudience = process.env.AZURE_AUDIENCE || azureClientId;
 
-      // Protected Resource Metadata — tells clients where the Authorization Server is
+      const azureScope = `api://${azureClientId}/access_as_user openid profile email offline_access`;
+      const azureAuthorizeUrl = `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/authorize`;
+      const azureTokenUrl = `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/token`;
+
+      // Protected Resource Metadata (RFC 9728)
+      // resource must include /mcp path; authorization_servers points to ourselves
+      // since we expose a valid RFC 8414 AS metadata document below.
       app.get('/.well-known/oauth-protected-resource', (_req, res) => {
         res.json({
-          resource: mcpServerUrl,
-          authorization_servers: [`https://login.microsoftonline.com/${azureTenantId}/v2.0`],
+          resource: `${mcpServerUrl}/mcp`,
+          authorization_servers: [mcpServerUrl],
           bearer_methods_supported: ['header'],
-          scopes_supported: ['openid', 'profile', 'email', `api://${azureClientId}/access_as_user`]
+          scopes_supported: [`api://${azureClientId}/access_as_user`, 'openid', 'profile', 'email']
         });
       });
 
-      // Authorization Server Metadata — points to Azure AD endpoints + our /register
+      // Authorization Server Metadata (RFC 8414)
+      // issuer MUST match the URL this document is served from (our server, not Azure AD).
+      // /authorize and /token are our proxy endpoints that forward to Azure AD.
       app.get('/.well-known/oauth-authorization-server', (_req, res) => {
         res.json({
-          issuer: `https://login.microsoftonline.com/${azureTenantId}/v2.0`,
-          authorization_endpoint: `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/authorize`,
-          token_endpoint: `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/token`,
+          issuer: mcpServerUrl,
+          authorization_endpoint: `${mcpServerUrl}/authorize`,
+          token_endpoint: `${mcpServerUrl}/token`,
           jwks_uri: `https://login.microsoftonline.com/${azureTenantId}/discovery/v2.0/keys`,
           registration_endpoint: `${mcpServerUrl}/register`,
-          scopes_supported: ['openid', 'profile', 'email', `api://${azureClientId}/access_as_user`],
+          scopes_supported: [`api://${azureClientId}/access_as_user`, 'openid', 'profile', 'email'],
           response_types_supported: ['code'],
-          grant_types_supported: ['authorization_code'],
+          grant_types_supported: ['authorization_code', 'refresh_token'],
           code_challenge_methods_supported: ['S256'],
           token_endpoint_auth_methods_supported: ['none']
         });
       });
 
-      // Dynamic Client Registration — returns pre-registered Azure AD app credentials
-      // Claude.ai calls this first; log redirect_uris so the user can add them to Azure AD
+      // Dynamic Client Registration (RFC 7591)
+      // Claude.ai always POSTs to /register at root regardless of registration_endpoint value.
+      // We return our Azure AD client_id as the registered client_id.
       app.post('/register', (req, res) => {
         const requestedUris: string[] = req.body?.redirect_uris || [];
         this.logger.info('OAuth Dynamic Client Registration', {
           redirect_uris: requestedUris,
-          client_name: req.body?.client_name,
-          note: 'Add the redirect_uris above to your Azure AD app registration'
+          client_name: req.body?.client_name
         });
         res.status(201).json({
           client_id: azureClientId,
+          client_name: req.body?.client_name || 'MCP Client',
           redirect_uris: requestedUris,
-          grant_types: ['authorization_code'],
+          grant_types: ['authorization_code', 'refresh_token'],
           response_types: ['code'],
           token_endpoint_auth_method: 'none',
-          scope: 'openid profile email'
+          scope: azureScope
         });
+      });
+
+      // Authorization proxy — Claude.ai always constructs /authorize on our domain.
+      // We redirect to Azure AD, substituting our client_id and scope.
+      app.get('/authorize', (req, res) => {
+        const q = req.query as Record<string, string>;
+        const params = new URLSearchParams({
+          response_type: 'code',
+          client_id: azureClientId!,
+          redirect_uri: q['redirect_uri'] || '',
+          scope: azureScope,
+          state: q['state'] || '',
+        });
+        if (q['code_challenge']) {
+          params.set('code_challenge', q['code_challenge']);
+          params.set('code_challenge_method', 'S256');
+        }
+        if (q['nonce']) params.set('nonce', q['nonce']);
+        this.logger.info('OAuth /authorize proxy → Azure AD', {
+          redirect_uri: q['redirect_uri'],
+          state: q['state']
+        });
+        res.redirect(302, `${azureAuthorizeUrl}?${params.toString()}`);
+      });
+
+      // Token proxy — Claude.ai always constructs /token on our domain.
+      // We forward the exchange to Azure AD, substituting our client_id and scope.
+      app.post('/token', express.urlencoded({ extended: false }), async (req: express.Request, res: express.Response) => {
+        const body: Record<string, string> = {
+          grant_type: req.body.grant_type,
+          client_id: azureClientId!,
+          scope: azureScope,
+        };
+        if (req.body.redirect_uri)    body['redirect_uri']    = req.body.redirect_uri;
+        if (req.body.code)            body['code']            = req.body.code;
+        if (req.body.code_verifier)   body['code_verifier']   = req.body.code_verifier;
+        if (req.body.refresh_token)   body['refresh_token']   = req.body.refresh_token;
+
+        this.logger.info('OAuth /token proxy → Azure AD', {
+          grant_type: req.body.grant_type,
+          redirect_uri: req.body.redirect_uri
+        });
+
+        try {
+          const response = await axios.post(azureTokenUrl, new URLSearchParams(body).toString(), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+          });
+          res.json(response.data);
+        } catch (err: unknown) {
+          const axiosErr = err as { response?: { status?: number; data?: unknown }; message?: string };
+          const status = axiosErr.response?.status || 500;
+          const data   = axiosErr.response?.data   || { error: 'token_exchange_failed', error_description: axiosErr.message };
+          this.logger.error('OAuth /token proxy failed', { status, data });
+          res.status(status).json(data);
+        }
       });
 
       // Bearer token validation — applied only to /mcp routes
@@ -811,7 +876,7 @@ export class HuduMcpServer {
         const authHeader = req.headers.authorization;
         if (!authHeader?.startsWith('Bearer ')) {
           res.status(401)
-            .set('WWW-Authenticate', `Bearer realm="${mcpServerUrl}", resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource"`)
+            .set('WWW-Authenticate', `Bearer resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource", scope="api://${azureClientId}/access_as_user"`)
             .json({ error: 'unauthorized', error_description: 'Bearer token required' });
           return;
         }
@@ -854,7 +919,7 @@ export class HuduMcpServer {
             }
           } catch { /* ignore decode errors */ }
           res.status(401)
-            .set('WWW-Authenticate', `Bearer realm="${mcpServerUrl}", error="invalid_token", error_description="Token validation failed"`)
+            .set('WWW-Authenticate', `Bearer resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource", error="invalid_token"`)
             .json({ error: 'invalid_token', error_description: 'Token validation failed' });
           return;
         }
