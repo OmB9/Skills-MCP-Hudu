@@ -17,6 +17,7 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { HuduClient } from './hudu-client.js';
 import { FilteredHuduClient } from './filtered-hudu-client.js';
 import { HuduConfig } from './types.js';
@@ -655,6 +656,8 @@ export class HuduMcpServer {
     const allowedOrigins = process.env.MCP_ALLOWED_ORIGINS?.split(',') || [
       'http://localhost',
       'http://127.0.0.1',
+      'https://claude.ai',             // Claude.ai custom connectors
+      /^https?:\/\/.*\.claude\.ai$/,   // Claude.ai subdomains
       /^http:\/\/localhost:\d+$/,
       /^http:\/\/127\.0\.0\.1:\d+$/,
       /^http:\/\/192\.168\.\d+\.\d+:\d+$/,  // Local network
@@ -683,7 +686,7 @@ export class HuduMcpServer {
         }
       },
       credentials: true,
-      methods: ['GET', 'POST', 'OPTIONS'],
+      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Session-Id']
     }));
 
@@ -715,6 +718,114 @@ export class HuduMcpServer {
       limit: '50mb',
       strict: false
     }));
+
+    // ============================================
+    // MCP OAuth 2.1 (RFC 9728 / RFC 8414 / RFC 7591)
+    // Required for Claude.ai custom connectors
+    // ============================================
+    const mcpOauthEnabled = process.env.MCP_OAUTH_ENABLED === 'true';
+    const mcpServerUrl = (process.env.MCP_SERVER_URL || `http://localhost:${port}`).replace(/\/$/, '');
+    const azureTenantId = process.env.AZURE_TENANT_ID;
+    const azureClientId = process.env.AZURE_CLIENT_ID;
+
+    if (mcpOauthEnabled) {
+      if (!azureTenantId || !azureClientId) {
+        throw new Error('AZURE_TENANT_ID and AZURE_CLIENT_ID are required when MCP_OAUTH_ENABLED=true');
+      }
+
+      const azureAudience = process.env.AZURE_AUDIENCE || azureClientId;
+
+      // Protected Resource Metadata — tells clients where the Authorization Server is
+      app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+        res.json({
+          resource: mcpServerUrl,
+          authorization_servers: [`https://login.microsoftonline.com/${azureTenantId}/v2.0`],
+          bearer_methods_supported: ['header'],
+          scopes_supported: ['openid', 'profile', 'email']
+        });
+      });
+
+      // Authorization Server Metadata — points to Azure AD endpoints + our /register
+      app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+        res.json({
+          issuer: `https://login.microsoftonline.com/${azureTenantId}/v2.0`,
+          authorization_endpoint: `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/authorize`,
+          token_endpoint: `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/token`,
+          jwks_uri: `https://login.microsoftonline.com/${azureTenantId}/discovery/v2.0/keys`,
+          registration_endpoint: `${mcpServerUrl}/register`,
+          scopes_supported: ['openid', 'profile', 'email'],
+          response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code'],
+          code_challenge_methods_supported: ['S256'],
+          token_endpoint_auth_methods_supported: ['none']
+        });
+      });
+
+      // Dynamic Client Registration — returns pre-registered Azure AD app credentials
+      // Claude.ai calls this first; log redirect_uris so the user can add them to Azure AD
+      app.post('/register', (req, res) => {
+        const requestedUris: string[] = req.body?.redirect_uris || [];
+        this.logger.info('OAuth Dynamic Client Registration', {
+          redirect_uris: requestedUris,
+          client_name: req.body?.client_name,
+          note: 'Add the redirect_uris above to your Azure AD app registration'
+        });
+        res.status(201).json({
+          client_id: azureClientId,
+          redirect_uris: requestedUris,
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+          token_endpoint_auth_method: 'none',
+          scope: 'openid profile email'
+        });
+      });
+
+      // Bearer token validation — applied only to /mcp routes
+      const JWKS = createRemoteJWKSet(
+        new URL(`https://login.microsoftonline.com/${azureTenantId}/discovery/v2.0/keys`)
+      );
+
+      app.use('/mcp', async (req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> => {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith('Bearer ')) {
+          res.status(401)
+            .set('WWW-Authenticate', `Bearer realm="${mcpServerUrl}", resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource"`)
+            .json({ error: 'unauthorized', error_description: 'Bearer token required' });
+          return;
+        }
+        const token = authHeader.slice(7);
+        try {
+          const { payload } = await jwtVerify(token, JWKS, {
+            issuer: `https://login.microsoftonline.com/${azureTenantId}/v2.0`,
+            audience: azureAudience
+          });
+          req.user = {
+            email: (payload['email'] as string) || (payload['preferred_username'] as string),
+            name: payload['name'] as string,
+            groups: (payload['groups'] as string[]) || []
+          };
+          this.logger.debug('Bearer token validated', { email: req.user.email });
+          return next();
+        } catch (err) {
+          this.logger.warn('Bearer token validation failed', { error: (err as Error).message });
+          res.status(401)
+            .set('WWW-Authenticate', `Bearer realm="${mcpServerUrl}", error="invalid_token", error_description="Token validation failed"`)
+            .json({ error: 'invalid_token', error_description: 'Token validation failed' });
+          return;
+        }
+      });
+
+      this.logger.info('MCP OAuth 2.1 enabled', {
+        serverUrl: mcpServerUrl,
+        tenantId: azureTenantId,
+        audience: azureAudience,
+        discoveryEndpoints: [
+          `${mcpServerUrl}/.well-known/oauth-protected-resource`,
+          `${mcpServerUrl}/.well-known/oauth-authorization-server`,
+          `${mcpServerUrl}/register`
+        ]
+      });
+    }
 
     // OAuth2-Proxy User Context Middleware
     // Extracts user information from headers injected by OAuth2-Proxy

@@ -139,7 +139,8 @@ services:
       - "traefik.http.routers.hudu-mcp.entrypoints=websecure"
       - "traefik.http.routers.hudu-mcp.tls=true"
       - "traefik.http.routers.hudu-mcp.tls.certresolver=Cloudflare"
-      - "traefik.http.routers.hudu-mcp.middlewares=hudu-oauth2-auth,hudu-security-headers,hudu-rate-limit"
+      # hudu-oauth2-auth removed: MCP server handles Bearer token auth natively (MCP OAuth 2.1)
+      - "traefik.http.routers.hudu-mcp.middlewares=hudu-security-headers,hudu-rate-limit"
       - "traefik.http.routers.hudu-mcp.service=hudu-mcp"
       - "traefik.http.services.hudu-mcp.loadbalancer.server.port=3100"
 
