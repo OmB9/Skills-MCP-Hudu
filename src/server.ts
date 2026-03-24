@@ -720,15 +720,37 @@ export class HuduMcpServer {
     }));
 
     // ============================================
-    // MCP OAuth 2.1 (RFC 9728 / RFC 8414 / RFC 7591)
-    // Required for Claude.ai custom connectors
+    // MCP Authentication
+    // Option A: Static Bearer token (MCP_BEARER_TOKEN)
+    // Option B: Azure AD OAuth 2.1 (MCP_OAUTH_ENABLED=true)
     // ============================================
     const mcpOauthEnabled = process.env.MCP_OAUTH_ENABLED === 'true';
     const mcpServerUrl = (process.env.MCP_SERVER_URL || `http://localhost:${port}`).replace(/\/$/, '');
     const azureTenantId = process.env.AZURE_TENANT_ID;
     const azureClientId = process.env.AZURE_CLIENT_ID;
+    const staticBearerToken = process.env.MCP_BEARER_TOKEN;
 
-    if (mcpOauthEnabled) {
+    if (staticBearerToken && !mcpOauthEnabled) {
+      // Static Bearer token — simple and reliable for Claude Desktop / Claude Code
+      app.use('/mcp', (req: express.Request, res: express.Response, next: express.NextFunction) => {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith('Bearer ')) {
+          res.status(401)
+            .set('WWW-Authenticate', 'Bearer realm="Hudu MCP"')
+            .json({ error: 'unauthorized', error_description: 'Bearer token required' });
+          return;
+        }
+        if (authHeader.slice(7) !== staticBearerToken) {
+          this.logger.warn('Invalid bearer token attempt', { ip: req.ip });
+          res.status(401)
+            .set('WWW-Authenticate', 'Bearer realm="Hudu MCP", error="invalid_token"')
+            .json({ error: 'invalid_token', error_description: 'Invalid bearer token' });
+          return;
+        }
+        next();
+      });
+      this.logger.info('Static Bearer token auth enabled for /mcp');
+    } else if (mcpOauthEnabled) {
       if (!azureTenantId || !azureClientId) {
         throw new Error('AZURE_TENANT_ID and AZURE_CLIENT_ID are required when MCP_OAUTH_ENABLED=true');
       }
