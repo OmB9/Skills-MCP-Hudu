@@ -1,185 +1,115 @@
 # User Onboarding Guide
-## How to Configure Claude Desktop for Hudu MCP
+## Connecting to the Hudu MCP Server
 
-**Time required:** 5 minutes
-
----
-
-## Step 1: Get Your Access Token (2 minutes)
-
-1. **Open your browser** and visit:
-   ```
-   https://mcp.hudu.247mgmt.com/token
-   ```
-
-2. **Login with your work credentials:**
-   - You'll be redirected to Microsoft login
-   - Use your Wheelhouse IT email and password
-   - May require MFA if enabled
-
-3. **Copy your token:**
-   - You'll see a page with your personal access token
-   - Click the **"Copy Token to Clipboard"** button
-   - The token will be copied automatically
-
-✅ **Success:** You now have your personal access token!
+**Time required:** 5–10 minutes
 
 ---
 
-## Step 2: Configure Claude Desktop (3 minutes)
+## Choose Your Client
 
-### For Windows Users:
+There are two supported ways to connect:
 
-1. **Open File Explorer** and navigate to:
-   ```
-   %APPDATA%\Claude
-   ```
+| Client | Auth Method | Setup |
+|--------|-------------|-------|
+| **Claude.ai web** (Pro/Team/Enterprise) | OAuth 2.0 (Azure AD) | See Part A |
+| **Claude Code CLI** | Static Bearer token | See Part B |
 
-   **Tip:** Copy and paste the path above into the File Explorer address bar
-
-2. **Find or create the file:** `claude_desktop_config.json`
-   - Right-click → New → Text Document
-   - Name it: `claude_desktop_config.json`
-
-3. **Open the file** with Notepad
-
-4. **Paste this configuration:**
-   ```json
-   {
-     "mcpServers": {
-       "hudu": {
-         "command": "npx",
-         "args": [
-           "mcp-remote",
-           "https://mcp.hudu.247mgmt.com/mcp",
-           "--header",
-           "Authorization: Bearer ${HUDU_MCP_TOKEN}"
-         ],
-         "env": {
-           "HUDU_MCP_TOKEN": "PASTE_YOUR_TOKEN_HERE"
-         }
-       }
-     }
-   }
-   ```
-
-5. **Replace `PASTE_YOUR_TOKEN_HERE`** with your actual token from Step 1
-   - Delete `PASTE_YOUR_TOKEN_HERE`
-   - Press `Ctrl+V` to paste your token
-   - Keep the quotes around the token
-
-6. **Save the file:**
-   - File → Save
-   - Close Notepad
+> **Claude Desktop (desktop app):** Claude Desktop's `claude_desktop_config.json` only supports local STDIO servers. This server uses HTTP transport. Use Claude.ai web or Claude Code CLI instead.
 
 ---
 
-## Step 3: Restart Claude Desktop
+## Part A — Claude.ai Web (OAuth 2.0)
 
-1. **Close Claude Desktop** completely
-   - Right-click Claude in system tray → Exit
-   - Or use Task Manager to end the process
+### Step 1: Add the custom connector
 
-2. **Start Claude Desktop** again
+1. Go to [claude.ai](https://claude.ai) → **Settings** (bottom-left) → **Integrations**
+2. Click **Add custom integration**
+3. Fill in:
+   - **Name**: `Hudu`
+   - **URL**: `https://<your-mcp-hostname>/mcp`
+   - **Authentication**: OAuth 2.0
+4. Click **Connect**
 
-3. **Verify MCP tools are available:**
-   - Open a new chat in Claude
-   - Type: "What Hudu tools are available?"
-   - Claude should list Hudu MCP tools
+### Step 2: Sign in with Microsoft
 
-✅ **Success:** You can now use Hudu data in Claude Desktop!
+A browser tab will open and redirect you to the Microsoft login page. Sign in with your organizational account (the Azure AD tenant associated with the MCP server).
+
+After signing in, the tab closes and Claude.ai shows the integration as active.
+
+### Step 3: Test it
+
+In a Claude.ai conversation, try:
+
+```
+Search for all companies in Hudu
+```
+
+or
+
+```
+Use hudu_search_company_information to find companies matching "acme"
+```
+
+Claude should call the tool and return results from your Hudu instance.
 
 ---
 
-## Testing Your Setup
+## Part B — Claude Code CLI (Bearer Token)
 
-Try these commands in Claude Desktop to test:
+### Step 1: Get your Bearer token
 
-**1. List all companies:**
-```
-Show me all companies in Hudu
-```
+Ask your administrator for the `MCP_BEARER_TOKEN` value from the server's `.env` file.
 
-**2. Search for a specific company:**
-```
-Search Hudu for "Bonnet House"
-```
+### Step 2: Add the server
 
-**3. Get company assets:**
-```
-Show me all assets for Bonnet House
+```bash
+claude mcp add --transport http hudu https://<your-mcp-hostname>/mcp \
+  --header "Authorization: Bearer <your-token>"
 ```
 
-**Expected:** Claude should query Hudu and return results!
+### Step 3: Test it
+
+```bash
+claude
+```
+
+Then in the chat:
+
+```
+Use hudu_search_company_information to list all companies
+```
 
 ---
 
 ## Troubleshooting
 
-### Problem: Claude says "I don't have access to Hudu tools"
+### Claude.ai shows "Couldn't reach the MCP server"
+- Verify the URL is `https://<hostname>/mcp` (not just the hostname)
+- Confirm the server is running: `curl https://<hostname>/health`
+- Check server logs: `docker compose logs hudu-mcp-server`
 
-**Solution:**
-1. Verify `claude_desktop_config.json` is in the correct location:
-   - `%APPDATA%\Claude\claude_desktop_config.json`
-2. Check JSON syntax is correct (no missing commas or brackets)
-3. Verify token is pasted correctly (no extra spaces)
-4. Restart Claude Desktop
+### OAuth tab opens but shows an Azure error
+- **AADSTS50011** (redirect URI mismatch): The callback URL hasn't been registered in Azure AD yet. Tell your administrator to check `SETUP.md` Step 3.3.
+- **AADSTS65001** (consent not granted): Admin consent is required. Contact your Azure AD administrator.
+- **AADSTS700016** (app not found): Wrong tenant — confirm you're signing in with the correct organizational account.
 
----
+### "Invalid token" or 401 after OAuth completes
+- Your session token may have expired. Remove the integration in Claude.ai Settings → Integrations and reconnect.
 
-### Problem: "Authentication failed" error
+### Claude Code CLI: "unauthorized"
+- Verify the Bearer token matches `MCP_BEARER_TOKEN` in the server's `.env`
+- Check that `MCP_OAUTH_ENABLED=false` is set (Bearer token mode and OAuth mode are mutually exclusive)
 
-**Solution:**
-1. Your token may have expired (tokens last 7 days)
-2. Visit `https://mcp.hudu.247mgmt.com/token` to get a new token
-3. Update `HUDU_MCP_TOKEN` in your config file
-4. Restart Claude Desktop
-
----
-
-### Problem: Config file won't save
-
-**Solution:**
-1. Make sure file extension is `.json` (not `.json.txt`)
-2. In Notepad: File → Save As → Save as type: "All Files (*.*)"
-3. Type filename: `claude_desktop_config.json`
-
----
-
-## Token Security
-
-**Important:**
-- ✅ Your token is personal to you - don't share it
-- ✅ Tokens automatically expire after 7 days for security
-- ✅ You can get a new token anytime from the token portal
-- ✅ If you suspect your token is compromised, contact your admin
+### No Hudu tools visible
+- Confirm the integration is showing as active (green) in Claude.ai Settings → Integrations
+- Try asking: "What Hudu tools are available?"
+- Rebuild if needed: `docker compose down && docker compose up -d --build`
 
 ---
 
 ## Need Help?
 
-**Can't access token portal?**
-- Verify you're connected to the internal network
-- Contact your IT administrator
-
-**Claude Desktop issues?**
-- Check Claude Desktop is up to date
-- Try restarting your computer
-- Contact your IT administrator
-
-**Hudu data questions?**
-- Check which companies/assets you have access to
-- Contact your IT administrator for access requests
-
----
-
-## Quick Reference
-
-**Token Portal:** `https://mcp.hudu.247mgmt.com/token`
-**Config File Location:** `%APPDATA%\Claude\claude_desktop_config.json`
-**Token Validity:** 7 days
-**Support:** Contact your IT administrator
-
----
-
-**Happy querying!** 🚀
+Contact your IT administrator and provide:
+- The error message you're seeing
+- Whether the issue occurs in Claude.ai web or Claude Code CLI
+- Output of: `curl https://<your-mcp-hostname>/health`

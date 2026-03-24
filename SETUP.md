@@ -32,12 +32,14 @@ Before you start, you need:
    - **Application (client) ID** → this is your `AZURE_CLIENT_ID`
    - **Directory (tenant) ID** → this is your `AZURE_TENANT_ID`
 
-### 1.2 Configure as a public client (SPA — enables PKCE)
+### 1.2 Configure as a public client (Mobile/Desktop — enables PKCE without a secret)
 
-1. In the app, go to **Authentication** → **Add a platform** → **Single-page application**
+1. In the app, go to **Authentication** → **Add a platform** → **Mobile and desktop applications**
 2. Leave Redirect URIs blank for now
 3. Under **Advanced settings**, set **Allow public client flows** to **Yes**
 4. Click **Save**
+
+> **Why Mobile and desktop applications, not SPA?** Azure AD's SPA platform type issues sender-constrained tokens that are bound to the origin. This breaks Claude.ai's programmatic token exchange. The Mobile/Desktop type supports PKCE without a client secret and does not apply token binding — which is exactly what Claude.ai's OAuth flow requires. The redirect URI (`https://claude.ai/api/mcp/auth_callback`) can only be registered under one platform type; it must be Mobile/Desktop.
 
 ### 1.3 Set token version to v2.0
 
@@ -100,7 +102,7 @@ MCP_SERVER_PORT=3100
 NODE_ENV=production
 LOG_LEVEL=info
 
-# ── Traefik / HTTPS ───────────────────────────────
+# ── Caddy / HTTPS ─────────────────────────────────
 MCP_HOSTNAME=mcp.yourcompany.com        # must match your DNS A record
 ACME_EMAIL=you@yourcompany.com          # for Let's Encrypt notifications
 
@@ -126,10 +128,10 @@ docker compose up -d --build
 
 This will:
 - Build the MCP server image
-- Start Traefik (which automatically fetches a Let's Encrypt certificate for your domain)
+- Start Caddy (which automatically obtains a Let's Encrypt certificate for your domain via TLS-ALPN-01)
 - Start the MCP server
 
-> **Note:** The first certificate issuance takes 30–60 seconds. Traefik must be able to receive a request on port 80 from Let's Encrypt's servers.
+> **Note:** The first certificate issuance takes 30–60 seconds. Both ports 80 and 443 must be reachable from the internet.
 
 ### 2.5 Verify everything is running
 
@@ -190,7 +192,7 @@ Copy the `redirect_uris` value.
 ### 3.3 Add the redirect URI to Azure AD
 
 1. Back in Azure Portal → your **Hudu MCP Server** app registration → **Authentication**
-2. Under **Single-page application**, click **Add URI**
+2. Under **Mobile and desktop applications**, click **Add URI**
 3. Paste the redirect URI from the logs (e.g. `https://claude.ai/api/mcp/auth_callback`)
 4. Click **Save**
 
@@ -226,8 +228,8 @@ You should see Claude calling the tool and returning results from your Hudu inst
 ### Certificate not issued / HTTPS not working
 
 - Confirm your DNS A record resolves to your server: `nslookup mcp.yourcompany.com`
-- Confirm port 80 is open: `curl http://mcp.yourcompany.com` from an external machine
-- Check Traefik logs: `docker compose logs traefik`
+- Confirm ports 80 and 443 are open: `curl http://mcp.yourcompany.com` from an external machine
+- Check Caddy logs: `docker compose logs caddy`
 
 ### 401 on /mcp after auth
 
@@ -255,7 +257,7 @@ docker compose logs -f hudu-mcp-server
 
 ```bash
 docker compose ps                          # container status
-docker compose logs traefik                # Traefik / cert issues
+docker compose logs caddy                  # Caddy / cert issues
 docker compose logs hudu-mcp-server        # MCP server issues
 curl https://mcp.yourcompany.com/health    # liveness
 ```
@@ -270,4 +272,4 @@ docker compose down
 docker compose up -d --build
 ```
 
-Traefik will auto-renew certificates — no action needed.
+Caddy will auto-renew certificates — no action needed.

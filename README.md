@@ -641,20 +641,17 @@ LOG_LEVEL=debug
 
 ### Logs
 
-**Docker:**
+**Docker (production with Caddy):**
 ```bash
-docker-compose logs -f hudu-mcp
+docker compose logs -f hudu-mcp-server
 ```
 
-**Node.js:**
+**Node.js (local):**
 ```bash
-# Logs are written to stdout/stderr
-npm start 2>&1 | tee hudu-mcp.log
-```
-
-**PM2:**
-```bash
-pm2 logs hudu-mcp
+# Logs are written to ./logs/ with daily rotation
+npm start
+# or check log files directly:
+cat logs/combined-$(date +%Y-%m-%d).log
 ```
 
 ---

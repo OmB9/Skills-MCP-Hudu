@@ -64,12 +64,14 @@ Alternative Claude Desktop config:
   - `GET /` (server info)
   - `ALL /mcp` (MCP endpoint)
 - `src/hudu-client.ts` — Hudu API client with typed methods
-- `src/tools/*` — 33 tools com prefixo `hudu_` e padrão `manage/search`:
+- `src/tools/*` — 47 tools com prefixo `hudu_` e padrão `manage/search`:
   - **Core**: articles, companies, assets, passwords (manage + search = 8 tools)
   - **Procedures**: procedures, procedure tasks (manage + search = 4 tools)
   - **Folders**: kb article folders (manage + search = 2 tools)
   - **Networks**: networks, VLANs, VLAN zones, IP addresses (manage + search = 8 tools)
   - **Storage**: uploads, rack storages, rack items, public photos (manage + search = 8 tools)
+  - **Extended**: expirations (1), websites (2), asset layouts (2), activity logs (1), relations (2), magic dash (2) = 10 tools
+  - **MCPHub bridge**: list/get prompts + list/read resources (4 tools)
   - **Utility**: admin, search global, navigation (3 tools)
 - `src/types.ts` — TypeScript types from OpenAPI
 - `hudu.json` — OpenAPI/Swagger spec (reference only)
@@ -86,29 +88,44 @@ Alternative Claude Desktop config:
 .
 ├─ hudu.json
 ├─ src/
-│  ├─ server.ts
-│  ├─ index.ts
-│  ├─ hudu-client.ts
-│  ├─ types.ts
+│  ├─ server.ts                    # MCP HTTP server, OAuth proxy, JWT validation
+│  ├─ index.ts                     # Entry point
+│  ├─ hudu-client.ts               # Hudu API client com typed methods
+│  ├─ filtered-hudu-client.ts      # Multi-tenant wrapper (HUDU_ALLOWED_COMPANY_IDS)
+│  ├─ resources.ts                 # MCP Resources (6 hudu:// URIs)
+│  ├─ prompts.ts                   # MCP Prompts definitions
+│  ├─ types.ts                     # TypeScript types from OpenAPI
+│  ├─ utils/
+│  │  └─ html-stripper.ts          # HTML cleanup for API responses
+│  ├─ formatters/
+│  │  ├─ markdown.ts               # 29 Markdown table formatters
+│  │  └─ response-formatter.ts     # Global response interceptor (Markdown output)
 │  └─ tools/
-│     ├─ working-index.ts   # Registro principal (33 tools)
-│     ├─ index.ts            # Registro secundário
-│     ├─ base.ts             # Helpers de resposta
-│     ├─ schema-utils.ts     # Schemas compartilhados
-│     ├─ articles.ts         # Artigos da base de conhecimento
-│     ├─ companies.ts        # Empresas e organizações
-│     ├─ assets.ts           # Ativos de TI
-│     ├─ passwords.ts        # Senhas e credenciais
-│     ├─ procedures.ts       # Procedimentos e tarefas
-│     ├─ folders.ts          # Pastas de organização
-│     ├─ networks.ts         # Redes, VLANs, IPs
-│     ├─ storage.ts          # Uploads, racks, fotos
-│     ├─ admin.ts            # Administração e auditoria
-│     ├─ search.ts           # Busca global unificada
-│     └─ navigation.ts       # Navegação rápida por nome
+│     ├─ working-index.ts          # Registro principal (47 tools)
+│     ├─ index.ts                  # Registro secundário
+│     ├─ base.ts                   # Helpers de resposta
+│     ├─ schema-utils.ts           # Schemas compartilhados
+│     ├─ articles.ts               # Artigos da base de conhecimento
+│     ├─ companies.ts              # Empresas e organizações
+│     ├─ assets.ts                 # Ativos de TI
+│     ├─ passwords.ts              # Senhas e credenciais
+│     ├─ procedures.ts             # Procedimentos e tarefas
+│     ├─ folders.ts                # Pastas de organização
+│     ├─ networks.ts               # Redes, VLANs, IPs
+│     ├─ storage.ts                # Uploads, racks, fotos
+│     ├─ expirations.ts            # Rastreamento de vencimentos
+│     ├─ websites.ts               # Monitoramento de websites
+│     ├─ asset-layouts.ts          # Templates de layouts de ativos
+│     ├─ activity-logs.ts          # Logs de auditoria
+│     ├─ relations.ts              # Relações entre entidades
+│     ├─ magic-dash.ts             # Widgets do Magic Dash
+│     ├─ admin.ts                  # Administração e auditoria
+│     ├─ search.ts                 # Busca global unificada
+│     └─ navigation.ts             # Navegação rápida por nome
 ├─ .env.example
+├─ Caddyfile                       # Reverse proxy + security headers
 ├─ Dockerfile
-├─ docker-compose.yml
+├─ docker-compose.yml              # Caddy + MCP server (production)
 ├─ tsconfig.json
 ├─ package.json
 └─ CLAUDE.md
@@ -129,7 +146,7 @@ Alternative Claude Desktop config:
   - `code` (stable)
   - `warnings[]` (if partial)
   - `nextSteps[]` (remediation hints)
-- **Logging:** Console.error for debugging (stderr), JSON logs for production.
+- **Logging:** Winston with daily log rotation (combined, error, and API log files). Console output in development.
 - **Resilience:** Graceful handling of API permission errors, continue with partial results.
 - **Security:** Environment-based config, no secrets in code or images.
 
@@ -146,19 +163,16 @@ npm start
 npm run dev
 ```
 
-**Docker:**
+**Docker (with Caddy, production):**
 ```bash
-docker-compose up --build -d
-docker-compose logs -f
-# or
-docker build -t hudu-mcp-server .
-docker run --rm --env-file .env -p 3100:3100 hudu-mcp-server
+docker compose up --build -d
+docker compose logs -f
 ```
 
-**PM2 (produção atual):**
+**Docker (standalone, local testing only):**
 ```bash
-pm2 start dist/index.js --name hudu-mcp
-pm2 status
+docker build -t hudu-mcp-server .
+docker run --rm --env-file .env -p 3100:3100 hudu-mcp-server
 ```
 
 Health check:
@@ -167,7 +181,7 @@ Health check:
 
 ---
 
-## Tool Contracts (33 tools registradas)
+## Tool Contracts (47 tools registradas)
 
 Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 - **Prefixo**: `hudu_` (namespace do servidor)
@@ -238,6 +252,30 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 | `hudu_search_all_resource_types` | Search | Busca global unificada |
 | `hudu_navigate_to_resource_by_name` | Nav | Navegação rápida por nome |
 
+### Extended Resources (10 tools)
+
+| Tool Name | Tipo | Domínio |
+|-----------|------|---------|
+| `hudu_search_expiration_tracking` | Query | Vencimentos, expirations, renovações |
+| `hudu_manage_website_monitoring` | CRUD | Websites, monitoramento, URLs |
+| `hudu_search_website_monitoring` | Query | Busca de websites |
+| `hudu_manage_asset_layout_templates` | CRUD | Templates de layouts, campos personalizados |
+| `hudu_search_asset_layout_templates` | Query | Busca de templates |
+| `hudu_search_activity_audit_logs` | Query | Logs de auditoria, atividades |
+| `hudu_manage_entity_relations` | CRUD | Relações entre entidades |
+| `hudu_search_entity_relations` | Query | Busca de relações |
+| `hudu_manage_dashboard_widgets` | CRUD | Magic Dash widgets |
+| `hudu_search_dashboard_widgets` | Query | Busca de widgets |
+
+### MCPHub Bridge Tools (4 tools)
+
+| Tool Name | Tipo | Domínio |
+|-----------|------|---------|
+| `hudu_list_prompts` | Bridge | Lista prompts MCP disponíveis |
+| `hudu_get_prompt` | Bridge | Retorna texto de um prompt MCP |
+| `hudu_list_resources` | Bridge | Lista recursos MCP (hudu:// URIs) |
+| `hudu_read_resource` | Bridge | Lê conteúdo de um recurso MCP |
+
 ### Padrão de Input (tools manage)
 
 ```json
@@ -281,12 +319,18 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 2. Environment configuration (.env)
 3. MCP SDK integration com Streamable HTTP Transport
 4. Hudu API client com typed methods
-5. 33 tools com padrão `hudu_manage/search_*` otimizado para ToolRAG
+5. 47 tools com padrão `hudu_manage/search_*` otimizado para ToolRAG
 6. Error handling para acesso parcial à API
-7. Docker configuration + PM2 em produção
+7. Docker configuration com Caddy (reverse proxy + auto HTTPS)
 8. Health endpoints (`/health`, `/`)
 9. Nomenclatura de tools conforme diretrizes obrigatórias (substantivo-chave, sinônimos, pt-BR)
 10. CORS, rate limiting e segurança de rede
+11. OAuth 2.1 com Azure AD (proxy `/authorize`, `/token`, `/register` + JWT validation)
+12. Static Bearer token como alternativa para Claude Code CLI
+13. Winston logging com daily log rotation
+14. MCP Resources (6 hudu:// URIs) e MCP Prompts
+15. Multi-tenant support via `HUDU_ALLOWED_COMPANY_IDS`
+16. Markdown-formatted responses (all tool outputs as tables)
 
 ⚠️ **Known Issues:**
 - Password endpoints requerem permissões elevadas na API
@@ -297,12 +341,12 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 ## Testing Protocol
 
 1. **Build**: `npm run build`
-2. **Start (PM2)**: `pm2 restart hudu-mcp` ou `npm start`
+2. **Start**: `npm start` ou `docker compose up -d --build`
 3. **Health check**: `curl http://localhost:3100/health`
 4. **Configure Claude Code (HTTP ONLY)**: `claude mcp add --transport http hudu http://127.0.0.1:3100/mcp`
 5. **Test tools**: Use `hudu_search_all_resource_types`, `hudu_search_company_information`, etc. no Claude Code
 6. **NEVER configure STDIO** - Only HTTP transport is supported
-7. **Verify logs**: `pm2 logs hudu-mcp`
+7. **Verify logs**: `docker compose logs hudu-mcp-server` ou `cat logs/combined-*.log`
 
 ---
 
@@ -311,7 +355,7 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 - ✅ Starts with clear diagnostics if env is incomplete
 - ✅ Health endpoint returns 200 OK
 - ✅ Claude Code connects over HTTP transport
-- ✅ Lists 33 tools via MCP protocol
+- ✅ Lists 47 tools via MCP protocol
 - ✅ Successfully calls `hudu_search_all_resource_types` e demais tools
 - ✅ Errors are typed and user-readable
 - ✅ Handles partial API access gracefully
@@ -322,8 +366,8 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 ## Troubleshooting
 
 - **401/403**: Verify `HUDU_API_KEY` and user permissions
-- **Connection refused**: Verificar se PM2/Docker está rodando na porta 3100
-- **No tools available**: Rebuild com `npm run build && pm2 restart hudu-mcp`
+- **Connection refused**: Verificar se Docker está rodando (`docker compose ps`)
+- **No tools available**: Rebuild com `docker compose down && docker compose up -d --build`
 - **Partial results**: Some endpoints require elevated permissions - this is expected
 
 ---
@@ -331,15 +375,21 @@ Todas as tools seguem as diretrizes de nomenclatura otimizadas para ToolRAG:
 ## Current Status
 
 **Working:**
-- 33 tools registradas e disponíveis (nomenclatura ToolRAG-optimized)
+- 47 tools registradas e disponíveis (nomenclatura ToolRAG-optimized)
 - Streamable HTTP transport na porta 3100
+- OAuth 2.1 com Azure AD (Claude.ai web custom connectors)
+- Static Bearer token (Claude Code CLI)
+- Caddy reverse proxy com Let's Encrypt TLS automático
 - Busca global unificada via `hudu_search_all_resource_types`
 - Navegação rápida via `hudu_navigate_to_resource_by_name`
 - Graceful error handling para permissões parciais
-- PM2 em produção, Docker disponível
+- MCP Resources (6 hudu:// URIs) e MCP Prompts
+- Multi-tenant support via `HUDU_ALLOWED_COMPANY_IDS`
+- Markdown-formatted responses em todas as tools
+- Winston logging com daily rotation
 
 **Diretrizes de Nomenclatura (2026-02):**
-- Prefixo `hudu_` em todas as 33 tools
+- Prefixo `hudu_` em todas as 47 tools
 - Padrão `manage` (CRUD) e `search` (query paginada)
 - Descrições em pt-BR com substantivo-chave primeiro
 - 2-4 sinônimos de domínio nos primeiros 100 caracteres
