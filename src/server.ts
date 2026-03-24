@@ -741,7 +741,7 @@ export class HuduMcpServer {
           resource: mcpServerUrl,
           authorization_servers: [`https://login.microsoftonline.com/${azureTenantId}/v2.0`],
           bearer_methods_supported: ['header'],
-          scopes_supported: ['openid', 'profile', 'email']
+          scopes_supported: ['openid', 'profile', 'email', `api://${azureClientId}/access_as_user`]
         });
       });
 
@@ -753,7 +753,7 @@ export class HuduMcpServer {
           token_endpoint: `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/token`,
           jwks_uri: `https://login.microsoftonline.com/${azureTenantId}/discovery/v2.0/keys`,
           registration_endpoint: `${mcpServerUrl}/register`,
-          scopes_supported: ['openid', 'profile', 'email'],
+          scopes_supported: ['openid', 'profile', 'email', `api://${azureClientId}/access_as_user`],
           response_types_supported: ['code'],
           grant_types_supported: ['authorization_code'],
           code_challenge_methods_supported: ['S256'],
@@ -794,25 +794,54 @@ export class HuduMcpServer {
           return;
         }
         const token = authHeader.slice(7);
-        try {
-          const { payload } = await jwtVerify(token, JWKS, {
-            issuer: `https://login.microsoftonline.com/${azureTenantId}/v2.0`,
-            audience: azureAudience
-          });
-          req.user = {
-            email: (payload['email'] as string) || (payload['preferred_username'] as string),
-            name: payload['name'] as string,
-            groups: (payload['groups'] as string[]) || []
-          };
-          this.logger.debug('Bearer token validated', { email: req.user.email });
-          return next();
-        } catch (err) {
-          this.logger.warn('Bearer token validation failed', { error: (err as Error).message });
+        // Try multiple audiences: configured value, bare client_id, and api:// prefixed.
+        // Azure AD issues tokens with different audiences depending on scopes requested.
+        const audiencesToTry = [...new Set([
+          azureAudience,
+          azureClientId,
+          `api://${azureClientId}`
+        ])].filter(Boolean) as string[];
+        let validatedPayload: Record<string, unknown> | undefined;
+        let lastError: unknown;
+        for (const aud of audiencesToTry) {
+          try {
+            const { payload } = await jwtVerify(token, JWKS, {
+              issuer: `https://login.microsoftonline.com/${azureTenantId}/v2.0`,
+              audience: aud
+            });
+            validatedPayload = payload as Record<string, unknown>;
+            this.logger.debug('Bearer token validated', { audience: aud });
+            break;
+          } catch (err) {
+            lastError = err;
+          }
+        }
+        if (!validatedPayload) {
+          // Decode token header/claims without verification for diagnostic logging
+          try {
+            const parts = token.split('.');
+            if (parts.length === 3) {
+              const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString());
+              this.logger.warn('Bearer token validation failed', {
+                error: (lastError as Error).message,
+                tokenAudience: claims.aud,
+                tokenIssuer: claims.iss,
+                tokenSubject: claims.sub,
+                triedAudiences: audiencesToTry
+              });
+            }
+          } catch { /* ignore decode errors */ }
           res.status(401)
             .set('WWW-Authenticate', `Bearer realm="${mcpServerUrl}", error="invalid_token", error_description="Token validation failed"`)
             .json({ error: 'invalid_token', error_description: 'Token validation failed' });
           return;
         }
+        req.user = {
+          email: (validatedPayload['email'] as string) || (validatedPayload['preferred_username'] as string),
+          name: validatedPayload['name'] as string,
+          groups: (validatedPayload['groups'] as string[]) || []
+        };
+        return next();
       });
 
       this.logger.info('MCP OAuth 2.1 enabled', {
