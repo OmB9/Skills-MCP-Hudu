@@ -9,10 +9,10 @@
 
 Your existing Traefik configuration:
 - **Traefik version:** latest
-- **Network:** `Internal` (external network)
-- **TLS:** Cloudflare DNS challenge
-- **Cert resolver:** `Cloudflare`
-- **Email:** nikko.pabion@wheelhouseit.com
+- **Network:** `Internal` (external network, customizable)
+- **TLS:** Cloudflare DNS challenge (or your preferred cert resolver)
+- **Cert resolver:** `Cloudflare` (update to match your resolver name)
+- **Email:** admin@your-company.com
 - **Cloudflare API Key:** Already configured
 
 **What we're adding:**
@@ -51,19 +51,19 @@ cp .env.traefik.example .env.traefik
 2. **Edit `.env.traefik`:**
 ```env
 # Hudu Configuration
-HUDU_BASE_URL=https://hudu.247mgmt.com
+HUDU_BASE_URL=https://hudu.your-company.com
 HUDU_API_KEY=your-hudu-api-key-here
 
 # Azure AD
-AZURE_TENANT_ID=7b80db37-11b2-4046-b65a-d1a4cf738372
+AZURE_TENANT_ID=your-azure-tenant-id
 AZURE_CLIENT_ID=your-azure-client-id-from-step-1
 AZURE_CLIENT_SECRET=your-azure-client-secret-from-step-1
-AZURE_TENANT_DOMAIN=wheelhouseit.onmicrosoft.com
-OAUTH2_EMAIL_DOMAINS=wheelhouseit.com,247mgmt.com
+AZURE_TENANT_DOMAIN=your-company.onmicrosoft.com
+OAUTH2_EMAIL_DOMAINS=your-company.com
 
 # Server (using your existing Cloudflare setup)
-MCP_HOSTNAME=mcp.hudu.247mgmt.com
-MCP_SERVER_IP=172.16.0.16
+MCP_HOSTNAME=mcp.hudu.your-domain.com
+MCP_SERVER_IP=&lt;your-server-ip&gt;
 
 # MCP Server settings
 MCP_SERVER_PORT=3100
@@ -102,15 +102,15 @@ Since your Traefik already has Cloudflare configured, just add the DNS record:
 - **Proxy:** Disabled (orange cloud OFF) - for Let's Encrypt validation
 - **TTL:** Auto
 
-**Internal DNS (corp.wheelhouseit.com):**
+**Internal DNS (corp.your-domain.com):**
 - **Type:** A
-- **Name:** `mcp.hudu.247mgmt.com`
-- **Content:** `172.16.0.16`
+- **Name:** `mcp.hudu.your-domain.com`
+- **Content:** `&lt;your-server-ip&gt;`
 
 **Verify DNS:**
 ```bash
-nslookup mcp.hudu.247mgmt.com
-# Should return: 172.16.0.16 (internal) or your public IP
+nslookup mcp.hudu.your-domain.com
+# Should return: &lt;your-server-ip&gt; (internal) or your public IP
 ```
 
 ---
@@ -147,7 +147,7 @@ docker-compose -f docker-compose.existing-traefik.yml ps
 
 ```bash
 # Check Traefik dashboard (if enabled)
-# Visit: http://traefik.docker.247mgmt.com:8080
+# Visit: http://traefik.docker.your-domain.com:8080
 
 # Or check Docker networks
 docker network inspect Internal
@@ -166,14 +166,14 @@ Connected to the `Internal` network.
 
 ```bash
 # Check certificate (should use your existing Cloudflare cert)
-curl -I https://mcp.hudu.247mgmt.com
+curl -I https://mcp.hudu.your-domain.com
 
 # Expected:
 # HTTP/2 200
 # server: traefik
 ```
 
-**From browser:** Visit `https://mcp.hudu.247mgmt.com`
+**From browser:** Visit `https://mcp.hudu.your-domain.com`
 - Should show green padlock (your existing Let's Encrypt cert)
 - Should redirect to Azure AD login
 
@@ -181,13 +181,13 @@ curl -I https://mcp.hudu.247mgmt.com
 
 ### Test 3: OAuth Flow
 
-1. **Visit:** `https://mcp.hudu.247mgmt.com`
+1. **Visit:** `https://mcp.hudu.your-domain.com`
 2. **Expected:**
    - Redirects to `login.microsoftonline.com`
    - Shows Microsoft login page
 3. **Login** with your Azure AD credentials
 4. **Expected:**
-   - Redirects back to `mcp.hudu.247mgmt.com`
+   - Redirects back to `mcp.hudu.your-domain.com`
    - Shows authenticated page
 
 ✅ **Success!** OAuth working with your existing Traefik!
@@ -196,7 +196,7 @@ curl -I https://mcp.hudu.247mgmt.com
 
 ### Test 4: Token Portal
 
-1. **Visit:** `https://mcp.hudu.247mgmt.com/token`
+1. **Visit:** `https://mcp.hudu.your-domain.com/token`
 2. **Login** with Azure AD (if not already authenticated)
 3. **Expected:**
    - See your name and email
@@ -221,7 +221,7 @@ curl -I https://mcp.hudu.247mgmt.com
 │  Container: traefik                     │
 │  Network: Internal                      │
 │  - Cloudflare TLS (already configured)  │
-│  - Routes: *.247mgmt.com                │
+│  - Routes: *.your-domain.com                │
 └────────┬────────────────────────────────┘
          │ Routes to OAuth2-Proxy
          ▼
@@ -277,7 +277,7 @@ docker logs traefik -f
   "level": "info",
   "message": "Tool execution started",
   "toolName": "hudu_search_company_information",
-  "user": "nikko.pabion@wheelhouseit.com",
+  "user": "admin@your-company.com",
   "userGroups": ["IT-Admins"],
   "timestamp": "2025-10-24T10:30:00.000Z"
 }
@@ -437,8 +437,8 @@ docker inspect hudu-mcp-server | grep -i traefik
 ```bash
 # Move to .env file (more secure)
 # In your Traefik directory, create .env:
-CF_API_EMAIL=nikko.pabion@wheelhouseit.com
-CF_API_KEY=9f2f6f7952c6810aeee9736bbae52c6d4e782
+CF_API_EMAIL=admin@your-company.com
+CF_API_KEY=&lt;your-cloudflare-api-key&gt;
 
 # Update docker-compose to use:
 environment:
@@ -452,7 +452,7 @@ environment:
 
 Same as standalone deployment:
 
-1. **Admin:** Send users: `https://mcp.hudu.247mgmt.com/token`
+1. **Admin:** Send users: `https://mcp.hudu.your-domain.com/token`
 2. **Users:** Follow [USER_ONBOARDING.md](USER_ONBOARDING.md)
 3. **Users:** Configure Claude Desktop with their token
 
@@ -479,7 +479,7 @@ Same as standalone deployment:
 - [ ] Azure AD App Registration completed
 - [ ] `.env.traefik` configured
 - [ ] OAuth2 cookie secret generated
-- [ ] DNS A record added (`mcp.hudu.247mgmt.com`)
+- [ ] DNS A record added (`mcp.hudu.your-domain.com`)
 - [ ] Verified `Internal` network exists
 - [ ] Backed up existing Traefik config
 
@@ -490,7 +490,7 @@ Same as standalone deployment:
 - [ ] Traefik routing to services (check `docker logs traefik`)
 
 **Testing:**
-- [ ] HTTPS works: `https://mcp.hudu.247mgmt.com`
+- [ ] HTTPS works: `https://mcp.hudu.your-domain.com`
 - [ ] Certificate valid (green padlock)
 - [ ] Azure AD login works
 - [ ] Token portal accessible

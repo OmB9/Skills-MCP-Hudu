@@ -32,7 +32,7 @@ app.get('/token', (req, res) => {
     .replace('{{USER_EMAIL}}', userEmail)
     .replace('{{USER_NAME}}', userName)
     .replace('{{ACCESS_TOKEN}}', accessToken)
-    .replace('{{MCP_HOSTNAME}}', process.env.MCP_HOSTNAME || 'mcp.hudu.247mgmt.com');
+    .replace('{{MCP_HOSTNAME}}', process.env.MCP_HOSTNAME || 'mcp.hudu.your-domain.com');
 
   res.send(html);
 });
